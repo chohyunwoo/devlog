@@ -4,16 +4,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import com.devlog.common.exception.AuthenticationFailedException;
 import com.devlog.common.exception.DuplicateEmailException;
 import com.devlog.common.exception.DuplicateNicknameException;
 import com.devlog.common.exception.DuplicateUserException;
+import com.devlog.controller.dto.UserLoginRequest;
 import com.devlog.controller.dto.UserSignupRequest;
 import com.devlog.domain.User;
 import com.devlog.repository.UserRepository;
+import com.devlog.security.JwtProvider;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -34,6 +41,9 @@ class UserServiceTest {
 
     @Mock
     private PasswordEncoder passwordEncoder;
+
+    @Mock
+    private JwtProvider jwtProvider;
 
     @InjectMocks
     private UserService userService;
@@ -171,6 +181,145 @@ class UserServiceTest {
                     .isInstanceOf(DuplicateUserException.class);
 
             verify(userRepository).save(any(User.class));
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 4. 로그인
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("로그인 흐름")
+    class Login {
+
+        // 프로덕션 코드의 DUMMY_BCRYPT_HASH 상수와 동일 값.
+        // 타이밍 공격 방어 분기에서 PasswordEncoder.matches 의 두 번째 인자가 이 값인지 검증한다.
+        // 상수값이 프로덕션에서 변경되면 이 테스트가 빨개지며 "의도적 변경인지" 판단하는 게이트가 된다.
+        private static final String DUMMY_BCRYPT_HASH =
+                "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
+        private static final String EMAIL = "user@devlog.com";
+        private static final String RAW_PASSWORD = "password123";
+        private static final long USER_ID = 42L;
+
+        private UserLoginRequest loginRequest() {
+            return new UserLoginRequest(EMAIL, RAW_PASSWORD);
+        }
+
+        private User mockedUser() {
+            User user = mock(User.class);
+            given(user.getId()).willReturn(USER_ID);
+            given(user.getEmail()).willReturn(EMAIL);
+            return user;
+        }
+
+        // -----------------------------------------------------------------
+        // 4-1. 정상 로그인
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("정상 자격 증명이면 access/refresh 토큰과 expiresIn 을 반환한다")
+        void should_returnLoginTokens_when_credentialsAreValid() {
+            // given
+            UserLoginRequest req = loginRequest();
+            User user = mockedUser();
+            given(userRepository.findByEmail(req.email())).willReturn(Optional.of(user));
+            given(user.matchesPassword(req.password(), passwordEncoder)).willReturn(true);
+            given(jwtProvider.generateAccessToken(USER_ID, EMAIL)).willReturn("access.jwt.token");
+            given(jwtProvider.generateRefreshToken(USER_ID, EMAIL)).willReturn("refresh.jwt.token");
+            given(jwtProvider.getAccessTokenExpirationSeconds()).willReturn(3600L);
+
+            // when
+            LoginTokens tokens = userService.login(req);
+
+            // then
+            assertThat(tokens.accessToken()).isEqualTo("access.jwt.token");
+            assertThat(tokens.refreshToken()).isEqualTo("refresh.jwt.token");
+            assertThat(tokens.accessTokenExpiresInSeconds()).isEqualTo(3600L);
+        }
+
+        @Test
+        @DisplayName("정상 자격 증명이면 JwtProvider 는 올바른 userId/email 인자로 호출된다")
+        void should_callJwtProviderWithCorrectArgs_when_credentialsAreValid() {
+            // given
+            UserLoginRequest req = loginRequest();
+            User user = mockedUser();
+            given(userRepository.findByEmail(req.email())).willReturn(Optional.of(user));
+            given(user.matchesPassword(req.password(), passwordEncoder)).willReturn(true);
+            given(jwtProvider.generateAccessToken(USER_ID, EMAIL)).willReturn("access.jwt.token");
+            given(jwtProvider.generateRefreshToken(USER_ID, EMAIL)).willReturn("refresh.jwt.token");
+            given(jwtProvider.getAccessTokenExpirationSeconds()).willReturn(3600L);
+
+            // when
+            userService.login(req);
+
+            // then: userId 와 email 이 정확한 순서/값으로 전달되었는지
+            verify(jwtProvider).generateAccessToken(eq(USER_ID), eq(EMAIL));
+            verify(jwtProvider).generateRefreshToken(eq(USER_ID), eq(EMAIL));
+            verify(jwtProvider).getAccessTokenExpirationSeconds();
+        }
+
+        // -----------------------------------------------------------------
+        // 4-2. 이메일 미존재
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("이메일이 존재하지 않으면 AuthenticationFailedException 을 던진다")
+        void should_throwAuthenticationFailed_when_emailNotFound() {
+            // given
+            UserLoginRequest req = loginRequest();
+            given(userRepository.findByEmail(req.email())).willReturn(Optional.empty());
+
+            // when / then
+            assertThatThrownBy(() -> userService.login(req))
+                    .isInstanceOf(AuthenticationFailedException.class);
+
+            // then: 토큰 발급 경로는 절대 호출되지 않아야 한다
+            verify(jwtProvider, never()).generateAccessToken(any(), anyString());
+            verify(jwtProvider, never()).generateRefreshToken(any(), anyString());
+        }
+
+        @Test
+        @DisplayName("이메일 미존재 시에도 PasswordEncoder.matches 를 DUMMY_BCRYPT_HASH 로 1회 호출한다 (타이밍 방어)")
+        void should_invokePasswordEncoderMatchesWithDummyHash_when_emailNotFound() {
+            // given
+            UserLoginRequest req = loginRequest();
+            given(userRepository.findByEmail(req.email())).willReturn(Optional.empty());
+
+            // when
+            assertThatThrownBy(() -> userService.login(req))
+                    .isInstanceOf(AuthenticationFailedException.class);
+
+            // then: matches(rawPassword, DUMMY_BCRYPT_HASH) 가 정확히 1회 호출되었는지
+            ArgumentCaptor<String> rawCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> hashCaptor = ArgumentCaptor.forClass(String.class);
+            verify(passwordEncoder, times(1)).matches(rawCaptor.capture(), hashCaptor.capture());
+            assertThat(rawCaptor.getValue()).isEqualTo(req.password());
+            assertThat(hashCaptor.getValue()).isEqualTo(DUMMY_BCRYPT_HASH);
+        }
+
+        // -----------------------------------------------------------------
+        // 4-3. 비밀번호 불일치
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("비밀번호가 일치하지 않으면 AuthenticationFailedException 을 던지고 토큰을 발급하지 않는다")
+        void should_throwAuthenticationFailed_when_passwordMismatch() {
+            // given: 이 케이스는 getId/getEmail 을 호출하지 않으므로 minimal mock 사용
+            // (불필요한 stubbing 은 MockitoExtension 에 의해 실패 처리됨)
+            UserLoginRequest req = loginRequest();
+            User user = mock(User.class);
+            given(userRepository.findByEmail(req.email())).willReturn(Optional.of(user));
+            given(user.matchesPassword(req.password(), passwordEncoder)).willReturn(false);
+
+            // when / then
+            assertThatThrownBy(() -> userService.login(req))
+                    .isInstanceOf(AuthenticationFailedException.class);
+
+            // then: JwtProvider 는 단 한 번도 호출되지 않아야 한다
+            verify(jwtProvider, never()).generateAccessToken(any(), anyString());
+            verify(jwtProvider, never()).generateRefreshToken(any(), anyString());
+            verify(jwtProvider, never()).getAccessTokenExpirationSeconds();
         }
     }
 }

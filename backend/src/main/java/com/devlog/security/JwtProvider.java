@@ -47,6 +47,10 @@ public class JwtProvider {
         return buildToken(userId, email, TokenType.ACCESS, accessTokenExpiration);
     }
 
+    public long getAccessTokenExpirationSeconds() {
+        return accessTokenExpiration.toSeconds();
+    }
+
     public String generateRefreshToken(Long userId, String email) {
         return buildToken(userId, email, TokenType.REFRESH, refreshTokenExpiration);
     }

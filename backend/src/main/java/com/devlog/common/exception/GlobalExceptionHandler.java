@@ -15,6 +15,14 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    @ExceptionHandler(AuthenticationFailedException.class)
+    public ResponseEntity<ErrorResponse> handleAuthenticationFailed(AuthenticationFailedException e) {
+        log.warn("Login failed: invalid credentials");
+        return ResponseEntity
+                .status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponse.of("AUTHENTICATION_FAILED", "이메일 또는 비밀번호가 올바르지 않습니다."));
+    }
+
     @ExceptionHandler(DuplicateEmailException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateEmail(DuplicateEmailException e) {
         log.warn("Signup conflict: duplicate email");

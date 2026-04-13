@@ -10,14 +10,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.devlog.common.exception.AuthenticationFailedException;
 import com.devlog.common.exception.DuplicateEmailException;
 import com.devlog.common.exception.DuplicateNicknameException;
 import com.devlog.common.exception.DuplicateUserException;
 import com.devlog.common.exception.GlobalExceptionHandler;
+import com.devlog.controller.dto.UserLoginRequest;
 import com.devlog.controller.dto.UserSignupRequest;
 import com.devlog.domain.User;
 import com.devlog.security.JwtAuthenticationFilter;
 import com.devlog.security.SecurityConfig;
+import com.devlog.service.LoginTokens;
 import com.devlog.service.UserService;
 import java.lang.reflect.Field;
 import java.time.LocalDateTime;
@@ -328,6 +331,181 @@ class AuthControllerTest {
             Map<String, Object> parsed = objectMapper.readValue(responseBody, LinkedHashMap.class);
             org.assertj.core.api.Assertions.assertThat(parsed.keySet())
                     .containsExactlyInAnyOrder("id", "email", "nickname", "createdAt");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 6. 로그인
+    // ---------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("로그인 API")
+    class Login {
+
+        private static final String LOGIN_URL = "/api/auth/login";
+
+        private static UserLoginRequest validLoginRequest() {
+            return new UserLoginRequest(VALID_EMAIL, VALID_PASSWORD);
+        }
+
+        // -----------------------------------------------------------------
+        // 6-1. 정상 로그인
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("유효한 자격 증명이면 200 OK 와 access/refresh/tokenType/expiresIn 을 반환한다")
+        void should_return200WithTokens_when_credentialsAreValid() throws Exception {
+            // given
+            given(userService.login(any(UserLoginRequest.class)))
+                    .willReturn(new LoginTokens("access.jwt", "refresh.jwt", 3600L));
+            String body = objectMapper.writeValueAsString(validLoginRequest());
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                    .andExpect(jsonPath("$.accessToken").value("access.jwt"))
+                    .andExpect(jsonPath("$.refreshToken").value("refresh.jwt"))
+                    .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                    .andExpect(jsonPath("$.expiresIn").value(3600));
+
+            verify(userService).login(any(UserLoginRequest.class));
+        }
+
+        @Test
+        @DisplayName("성공 응답 본문은 accessToken/refreshToken/tokenType/expiresIn 네 개 키만 존재한다")
+        void should_exposeExactlyFourFields_inLoginResponseBody() throws Exception {
+            // given
+            given(userService.login(any(UserLoginRequest.class)))
+                    .willReturn(new LoginTokens("access.jwt", "refresh.jwt", 3600L));
+            String body = objectMapper.writeValueAsString(validLoginRequest());
+
+            // when
+            String responseBody = mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+
+            // then
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(responseBody, LinkedHashMap.class);
+            org.assertj.core.api.Assertions.assertThat(parsed.keySet())
+                    .containsExactlyInAnyOrder("accessToken", "refreshToken", "tokenType", "expiresIn");
+        }
+
+        // -----------------------------------------------------------------
+        // 6-2. 요청 본문 검증 실패
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("이메일 형식이 아니면 400 INVALID_REQUEST 를 반환하고 fieldErrors 에 email 이 포함된다")
+        void should_return400_when_loginEmailIsMalformed() throws Exception {
+            // given
+            UserLoginRequest req = new UserLoginRequest("not-email", VALID_PASSWORD);
+            String body = objectMapper.writeValueAsString(req);
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.message").value("요청 값이 올바르지 않습니다."))
+                    .andExpect(jsonPath("$.fieldErrors[?(@.field == 'email')]").exists());
+        }
+
+        @Test
+        @DisplayName("이메일이 빈 문자열이면 400 INVALID_REQUEST 를 반환한다")
+        void should_return400_when_loginEmailIsBlank() throws Exception {
+            // given
+            UserLoginRequest req = new UserLoginRequest("", VALID_PASSWORD);
+            String body = objectMapper.writeValueAsString(req);
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.fieldErrors[?(@.field == 'email')]").exists());
+        }
+
+        @Test
+        @DisplayName("비밀번호가 빈 문자열이면 400 INVALID_REQUEST 를 반환한다")
+        void should_return400_when_loginPasswordIsBlank() throws Exception {
+            // given
+            UserLoginRequest req = new UserLoginRequest(VALID_EMAIL, "");
+            String body = objectMapper.writeValueAsString(req);
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.fieldErrors[?(@.field == 'password')]").exists());
+        }
+
+        @Test
+        @DisplayName("비밀번호가 129자(상한 초과)면 400 INVALID_REQUEST 를 반환한다 (@Size(max=128) 회귀 방어)")
+        void should_return400_when_loginPasswordExceedsMaxSize() throws Exception {
+            // given: 129 글자
+            String tooLong = "a".repeat(129);
+            UserLoginRequest req = new UserLoginRequest(VALID_EMAIL, tooLong);
+            String body = objectMapper.writeValueAsString(req);
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.fieldErrors[?(@.field == 'password')]").exists());
+        }
+
+        // -----------------------------------------------------------------
+        // 6-3. 인증 실패 (401)
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("자격 증명 실패 시 401 AUTHENTICATION_FAILED 와 사용자 문구를 반환한다")
+        void should_return401_when_serviceThrowsAuthenticationFailed() throws Exception {
+            // given
+            given(userService.login(any(UserLoginRequest.class)))
+                    .willThrow(new AuthenticationFailedException());
+            String body = objectMapper.writeValueAsString(validLoginRequest());
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(body))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(jsonPath("$.code").value("AUTHENTICATION_FAILED"))
+                    .andExpect(jsonPath("$.message").value("이메일 또는 비밀번호가 올바르지 않습니다."))
+                    .andExpect(jsonPath("$.fieldErrors").isArray())
+                    .andExpect(jsonPath("$.fieldErrors").isEmpty());
+        }
+
+        // -----------------------------------------------------------------
+        // 6-4. 잘못된 JSON 본문
+        // -----------------------------------------------------------------
+
+        @Test
+        @DisplayName("JSON 문법 오류가 있으면 400 MALFORMED_JSON 을 반환한다")
+        void should_return400_when_loginJsonIsMalformed() throws Exception {
+            // given: 닫는 중괄호 없는 깨진 JSON
+            String malformed = "{\"email\":\"user@devlog.com\",\"password\":\"password123\"";
+
+            // when / then
+            mockMvc.perform(post(LOGIN_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(malformed))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("MALFORMED_JSON"))
+                    .andExpect(jsonPath("$.message").value("요청 본문을 해석할 수 없습니다."));
         }
     }
 }
