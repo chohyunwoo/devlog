@@ -142,6 +142,48 @@ com.devlog
 - ❌ **시크릿 커밋 금지** — `application.yml`의 DB 비밀번호·JWT 시크릿은 환경 변수나 `application-local.yml`(gitignore) 사용.
 - ❌ **`any` 남용 금지** — TypeScript에서 `any`는 정당한 사유가 없으면 사용하지 않는다.
 
+## 9. 개발 순서
+
+각 단계는 별도의 `feature/<기능명>` 브랜치에서 작업하고, 완료 시 PR을 통해 `main`으로 머지한다. 단계 번호는 권장 진행 순서이며, 백엔드 1~3단계가 끝난 뒤 프론트엔드 4~6단계로 넘어간다.
+
+### 백엔드 개발 순서
+
+#### 1단계 — `feature/user-auth`
+User 엔티티 → UserRepository → JWT 설정 → Spring Security → 회원가입 API → 로그인 API → `@test-writer` 테스트 → `@backend-reviewer` 리뷰 → PR
+
+#### 2단계 — `feature/post-crud`
+Post/Tag 엔티티 → Repository → Service → Controller → `@test-writer` 테스트 → `@backend-reviewer` 리뷰 → PR
+
+#### 3단계 — `feature/devnote-crud`
+DevNote 엔티티 → CRUD API → `@test-writer` 테스트 → `@backend-reviewer` 리뷰 → PR
+
+### 프론트엔드 개발 순서
+
+#### 4단계 — `feature/frontend-auth`
+로그인/회원가입 페이지 → API 연동 → `@frontend-reviewer` 리뷰 → `/web-design-reviewer` → PR
+
+#### 5단계 — `feature/frontend-post`
+포스트 목록/상세/작성 페이지 → API 연동 → 리뷰 → PR
+
+#### 6단계 — `feature/frontend-devnote`
+TIL 페이지 → API 연동 → 리뷰 → PR
+
+### 개발 사이클 (매 기능마다 반복)
+
+```
+코드 작성
+  → @backend-reviewer 리뷰
+  → 수정
+  → @test-writer 테스트 작성
+  → 테스트 통과
+  → 자동 commit + push
+  → PR 생성
+```
+
+> 새 기능 코드 작성이 완료되면 별도 지시 없이 자동으로
+> `@backend-reviewer` 리뷰 → 🔴🟡 항목 수정 → `@test-writer` 테스트 작성
+> 순서로 진행해줘. 명시적으로 중단 요청이 없으면 끝까지 진행할 것.
+
 ---
 
 ## 자동화 메모 (`.claude/settings.json`)
@@ -156,3 +198,18 @@ com.devlog
   3. 위 게이트 통과 시 파일명 기반 `chore:` 메시지로 자동 커밋 + push + 비프음.
 
 자동 커밋은 `chore:` 고정이므로, `feat`/`fix`/`test`/`refactor` 등의 의미 있는 커밋이 필요하면 대화 종료 **전에** 직접 `git commit -m`으로 먼저 커밋해 둘 것.
+
+### 기능 개발 완료 시 종료 절차
+
+기능 개발이 완료되면 대화 종료 **전에** 반드시 아래 순서로 진행한다:
+
+1. **테스트 모두 통과 확인** (`./gradlew test`)
+2. **의미 있는 커밋 메시지로 직접 커밋**
+   ```bash
+   git commit -m "feat(auth): add User entity with BCrypt and Bean Validation"
+   ```
+3. **현재 브랜치로 push**
+   ```bash
+   git push origin <현재브랜치명>
+   ```
+4. 그다음 대화 종료 (Stop 훅은 커밋할 것이 없으므로 자동으로 스킵됨)
