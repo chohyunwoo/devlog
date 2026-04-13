@@ -11,3 +11,9 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.H2Dialect
+
+# 테스트 전용 고정값 — 운영과 공유하지 않음. 실제 서비스는 환경변수 JWT_SECRET 주입.
+jwt:
+  secret: test-secret-for-devlog-unit-tests-not-for-production-min32
+  access-token-expiration: 1h
+  refresh-token-expiration: 1d
