@@ -1,0 +1,11 @@
+# Backup files
+CLAUDE.md.backup
+*.backup
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
