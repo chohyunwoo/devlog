@@ -186,6 +186,334 @@ TIL 페이지 → API 연동 → 리뷰 → PR
 
 ---
 
+## 10. 백엔드 API 문서
+
+현재까지 구현된 백엔드 REST API 전체 목록. 모든 요청/응답은 `application/json` + UTF-8.
+
+### 10.1 공통
+
+#### 인증 방식
+
+- **Bearer JWT** — `Authorization: Bearer <accessToken>` 헤더로 전달
+- **알고리즘**: HS256 (대칭키)
+- **Access Token 만료**: 1시간 (`jwt.access-token-expiration`)
+- **Refresh Token 만료**: 14일 (`jwt.refresh-token-expiration`)
+- **Claims**: `iss=devlog`, `aud=devlog-api`, `sub=userId`, `email`, `typ=ACCESS|REFRESH`, `jti` (UUID), `iat`, `exp`
+- **타입 분리**: `validateAccessToken` / `validateRefreshToken` 이 `typ` claim 으로 엄격 구분
+- **Clock Skew**: 30초 허용
+
+#### 공개/비공개 엔드포인트 분류
+
+| 구분 | 엔드포인트 |
+|------|-----------|
+| 공개 (인증 불필요) | `POST /api/auth/signup`, `POST /api/auth/login`, `GET /api/posts`, `GET /api/posts/**` |
+| 인증 필수 | 나머지 모든 `/api/**` |
+| 본인만 접근 | `PUT /api/posts/{id}`, `DELETE /api/posts/{id}`, 모든 `/api/dev-notes/**` |
+
+#### 공통 에러 응답 포맷
+
+```json
+{
+  "code": "INVALID_REQUEST",
+  "message": "요청 값이 올바르지 않습니다.",
+  "fieldErrors": [
+    { "field": "email", "message": "must not be blank" }
+  ]
+}
+```
+
+`fieldErrors` 는 Bean Validation 실패 시에만 값이 채워지고, 그 외에는 빈 배열 `[]`.
+
+#### 공통 에러 코드
+
+| HTTP Status | Code | 의미 |
+|-------------|------|------|
+| 400 | `INVALID_REQUEST` | Bean Validation 실패 (field errors 포함) |
+| 400 | `MALFORMED_JSON` | 요청 본문 JSON 파싱 실패 |
+| 400 | `INVALID_PARAMETER` | path variable 타입 불일치 |
+| 401 | (empty body) | 인증 필요 엔드포인트에 토큰 없음/무효 (`HttpStatusEntryPoint`) |
+| 401 | `AUTHENTICATION_FAILED` | 로그인 실패 (이메일/비밀번호 불일치) |
+| 403 | `FORBIDDEN` | Post 작성자가 아닌 사용자가 수정·삭제 시도 |
+| 404 | `POST_NOT_FOUND` | 포스트 없음 |
+| 404 | `DEV_NOTE_NOT_FOUND` | 개발 일기 없음 또는 타인 소유 (존재 은닉) |
+| 409 | `DUPLICATE_EMAIL` | 이메일 중복 |
+| 409 | `DUPLICATE_NICKNAME` | 닉네임 중복 |
+| 409 | `DUPLICATE_USER` | 회원가입 race condition fallback |
+| 500 | `INTERNAL_ERROR` | 예상치 못한 예외 |
+
+---
+
+### 10.2 인증 API (`/api/auth`)
+
+#### `POST /api/auth/signup` — 회원가입
+
+- **인증**: 불필요
+- **요청**
+
+  ```json
+  {
+    "email": "user@devlog.com",
+    "password": "password1234",
+    "nickname": "devuser"
+  }
+  ```
+
+  | 필드 | 제약 |
+  |------|------|
+  | `email` | `@NotBlank @Email @Size(max=254)` |
+  | `password` | `@NotBlank @Size(min=8, max=72)` |
+  | `nickname` | `@NotBlank @Size(min=2, max=50)` |
+
+- **성공 응답** — `201 Created`
+
+  ```json
+  {
+    "id": 1,
+    "email": "user@devlog.com",
+    "nickname": "devuser",
+    "createdAt": "2026-04-13T10:20:30"
+  }
+  ```
+
+- **에러**: `400 INVALID_REQUEST`, `409 DUPLICATE_EMAIL`, `409 DUPLICATE_NICKNAME`
+
+#### `POST /api/auth/login` — 로그인
+
+- **인증**: 불필요
+- **요청**
+
+  ```json
+  {
+    "email": "user@devlog.com",
+    "password": "password1234"
+  }
+  ```
+
+  | 필드 | 제약 |
+  |------|------|
+  | `email` | `@NotBlank @Email` |
+  | `password` | `@NotBlank @Size(max=128)` |
+
+- **성공 응답** — `200 OK`
+
+  ```json
+  {
+    "accessToken": "eyJhbGci...",
+    "refreshToken": "eyJhbGci...",
+    "tokenType": "Bearer",
+    "expiresIn": 3600
+  }
+  ```
+
+  `expiresIn` 은 access token 만료까지 남은 초 단위.
+
+- **에러**: `400 INVALID_REQUEST`, `401 AUTHENTICATION_FAILED`
+- **보안**: 이메일/비밀번호 불일치는 메시지·상태코드 통일 (열거 공격 방어). 사용자 미존재 시에도 dummy BCrypt `matches()` 호출로 응답 시간 평준화 (타이밍 공격 방어).
+
+---
+
+### 10.3 포스트 API (`/api/posts`)
+
+공개 블로그 영역. 읽기는 누구나, 쓰기는 인증 + 작성자 본인만.
+
+#### `POST /api/posts` — 포스트 작성
+
+- **인증**: 필수 (Bearer)
+- **요청**
+
+  ```json
+  {
+    "title": "Spring Boot 4.0 체험기",
+    "content": "오늘 겪은 내용은...",
+    "tags": ["java", "spring"]
+  }
+  ```
+
+  | 필드 | 제약 |
+  |------|------|
+  | `title` | `@NotBlank @Size(max=200)` |
+  | `content` | `@NotBlank` (TEXT) |
+  | `tags` | `Set<@NotBlank @Size(max=50) String>` (각 태그 ≤50자, 선택) |
+
+- **성공 응답** — `201 Created` (`PostResponse`)
+
+  ```json
+  {
+    "id": 42,
+    "title": "Spring Boot 4.0 체험기",
+    "content": "오늘 겪은 내용은...",
+    "author": { "id": 1, "nickname": "devuser" },
+    "tags": ["java", "spring"],
+    "createdAt": "2026-04-13T10:20:30",
+    "updatedAt": "2026-04-13T10:20:30"
+  }
+  ```
+
+- **에러**: `400 INVALID_REQUEST`, `401`
+
+#### `GET /api/posts` — 포스트 목록 (공개)
+
+- **인증**: 불필요
+- **쿼리 파라미터**
+
+  | 이름 | 타입 | 기본값 | 설명 |
+  |------|------|--------|------|
+  | `page` | int | 0 | 페이지 번호 (0-based) |
+  | `size` | int | 20 | 페이지 크기 |
+  | `sort` | string | `createdAt,desc` | 정렬 |
+  | `authorId` | Long | - | 특정 작성자 필터 |
+  | `tag` | string | - | 특정 태그 필터 |
+
+  `authorId` 와 `tag` 를 **동시에 지정하면 400 `INVALID_REQUEST`** 반환.
+
+- **성공 응답** — `200 OK` (`PageResponse<PostSummaryResponse>`)
+
+  ```json
+  {
+    "content": [
+      {
+        "id": 42,
+        "title": "Spring Boot 4.0 체험기",
+        "author": { "id": 1, "nickname": "devuser" },
+        "tags": ["java", "spring"],
+        "createdAt": "2026-04-13T10:20:30",
+        "updatedAt": "2026-04-13T10:20:30"
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1,
+    "first": true,
+    "last": true
+  }
+  ```
+
+  `PostSummaryResponse` 는 `content` 필드가 제외된 목록용 DTO.
+
+#### `GET /api/posts/{postId}` — 포스트 상세 (공개)
+
+- **인증**: 불필요
+- **성공 응답** — `200 OK` (`PostResponse`, 위와 동일 구조)
+- **에러**: `404 POST_NOT_FOUND`, `400 INVALID_PARAMETER` (postId 가 숫자 아님)
+
+#### `PUT /api/posts/{postId}` — 포스트 수정
+
+- **인증**: 필수
+- **권한**: 작성자 본인만
+- **요청**: `PostCreateRequest` 와 동일 스키마 (`PostUpdateRequest`)
+- **성공 응답** — `200 OK` (`PostResponse`, `updatedAt` 즉시 갱신)
+- **에러**: `400`, `401`, `403 FORBIDDEN`, `404 POST_NOT_FOUND`
+
+#### `DELETE /api/posts/{postId}` — 포스트 삭제
+
+- **인증**: 필수
+- **권한**: 작성자 본인만
+- **성공 응답** — `204 No Content` (body 없음)
+- **에러**: `401`, `403 FORBIDDEN`, `404 POST_NOT_FOUND`
+
+---
+
+### 10.4 개발 일기 API (`/api/dev-notes`)
+
+**비공개 전용** — 모든 엔드포인트가 인증 필수이며, 본인 소유 노트만 조회·수정·삭제 가능.
+타인 소유 노트 접근 시 **`404 DEV_NOTE_NOT_FOUND`** 반환 (존재 은닉, `403` 분기 없음).
+
+#### `POST /api/dev-notes` — 생성
+
+- **인증**: 필수
+- **요청**
+
+  ```json
+  {
+    "title": "2026-04-13 TIL",
+    "content": "@EntityGraph 사용법 정리"
+  }
+  ```
+
+  | 필드 | 제약 |
+  |------|------|
+  | `title` | `@NotBlank @Size(max=200)` |
+  | `content` | `@NotBlank` (TEXT) |
+
+- **성공 응답** — `201 Created` (`DevNoteResponse`)
+
+  ```json
+  {
+    "id": 7,
+    "title": "2026-04-13 TIL",
+    "content": "@EntityGraph 사용법 정리",
+    "createdAt": "2026-04-13T10:20:30",
+    "updatedAt": "2026-04-13T10:20:30"
+  }
+  ```
+
+  **`author` 필드 없음** — 항상 본인 소유가 자명하므로 응답에서 제외.
+
+- **에러**: `400`, `401`
+
+#### `GET /api/dev-notes` — 목록 (본인 것만)
+
+- **인증**: 필수
+- **쿼리 파라미터**: `page`, `size`, `sort` (기본 `createdAt,desc`)
+- **성공 응답** — `200 OK` (`PageResponse<DevNoteSummaryResponse>`)
+
+  ```json
+  {
+    "content": [
+      {
+        "id": 7,
+        "title": "2026-04-13 TIL",
+        "createdAt": "2026-04-13T10:20:30",
+        "updatedAt": "2026-04-13T10:20:30"
+      }
+    ],
+    "page": 0,
+    "size": 20,
+    "totalElements": 1,
+    "totalPages": 1,
+    "first": true,
+    "last": true
+  }
+  ```
+
+  `DevNoteSummaryResponse` 는 `content` 필드가 제외된 목록용 DTO.
+
+#### `GET /api/dev-notes/{noteId}` — 상세
+
+- **인증**: 필수
+- **성공 응답** — `200 OK` (`DevNoteResponse`)
+- **에러**: `404 DEV_NOTE_NOT_FOUND` (없거나 타인 소유), `400 INVALID_PARAMETER`
+
+#### `PUT /api/dev-notes/{noteId}` — 수정
+
+- **인증**: 필수
+- **요청**: `DevNoteUpdateRequest` (create 와 동일 스키마)
+- **성공 응답** — `200 OK` (`DevNoteResponse`, `updatedAt` 즉시 갱신)
+- **에러**: `400`, `401`, `404 DEV_NOTE_NOT_FOUND`
+
+#### `DELETE /api/dev-notes/{noteId}` — 삭제
+
+- **인증**: 필수
+- **성공 응답** — `204 No Content`
+- **에러**: `401`, `404 DEV_NOTE_NOT_FOUND`
+
+---
+
+### 10.5 이월된 보안·설계 이슈
+
+아래 항목은 현재 코드에서 **의도적으로 이월**된 상태입니다. 새 기능을 붙이기 전에 관련 영역에 해당하는지 먼저 확인할 것.
+
+- **refresh 토큰 전달 방식** — 현재 JSON body. HttpOnly 쿠키 전환 시 CSRF 정책 재평가 필요.
+- **refresh 회전·폐기** — Redis `refresh:{userId}:{jti}` 저장소 부재. 현재는 `jti` claim 만 발급.
+- **brute force 방어** — rate limit / lockout 미도입. 로그인·회원가입 보호 필요.
+- **구조화 로그인 실패 로그** — client IP / email HMAC / MDC 이월.
+- **AuthenticationEntryPoint JSON 포맷** — 현재 `HttpStatusEntryPoint` 로 401 빈 body. `ErrorResponse` 포맷 통일 필요.
+- **CORS** — 프론트 연결 단계(`feature/frontend-auth`)에서 정식 정책 추가.
+- **계정 열거** — 메시지·상태코드는 통일했으나 완전 차단은 rate limit 도입 후.
+
+---
+
 ## 자동화 메모 (`.claude/settings.json`)
 
 이 레포에는 프로젝트 전용 훅이 설치되어 있다. 작업 중 다음 동작이 자동 발생한다:
