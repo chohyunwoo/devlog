@@ -198,3 +198,18 @@ TIL 페이지 → API 연동 → 리뷰 → PR
   3. 위 게이트 통과 시 파일명 기반 `chore:` 메시지로 자동 커밋 + push + 비프음.
 
 자동 커밋은 `chore:` 고정이므로, `feat`/`fix`/`test`/`refactor` 등의 의미 있는 커밋이 필요하면 대화 종료 **전에** 직접 `git commit -m`으로 먼저 커밋해 둘 것.
+
+### 기능 개발 완료 시 종료 절차
+
+기능 개발이 완료되면 대화 종료 **전에** 반드시 아래 순서로 진행한다:
+
+1. **테스트 모두 통과 확인** (`./gradlew test`)
+2. **의미 있는 커밋 메시지로 직접 커밋**
+   ```bash
+   git commit -m "feat(auth): add User entity with BCrypt and Bean Validation"
+   ```
+3. **현재 브랜치로 push**
+   ```bash
+   git push origin <현재브랜치명>
+   ```
+4. 그다음 대화 종료 (Stop 훅은 커밋할 것이 없으므로 자동으로 스킵됨)
