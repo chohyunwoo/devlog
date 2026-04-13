@@ -40,6 +40,14 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of("FORBIDDEN", "작성자만 수정·삭제할 수 있습니다."));
     }
 
+    @ExceptionHandler(DevNoteNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleDevNoteNotFound(DevNoteNotFoundException e) {
+        log.warn("DevNote not found or not owned");
+        return ResponseEntity
+                .status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("DEV_NOTE_NOT_FOUND", "요청한 DevNote를 찾을 수 없습니다."));
+    }
+
     @ExceptionHandler(DuplicateEmailException.class)
     public ResponseEntity<ErrorResponse> handleDuplicateEmail(DuplicateEmailException e) {
         log.warn("Signup conflict: duplicate email");
