@@ -16,6 +16,8 @@ type RequestOptions = {
   method?: Method;
   body?: unknown;
   auth?: boolean;
+  cache?: RequestCache;
+  next?: { revalidate?: number | false; tags?: string[] };
 };
 
 function backendBaseUrl(): string {
@@ -28,7 +30,13 @@ function backendBaseUrl(): string {
 
 export async function apiRequest<T>(
   path: string,
-  { method = "GET", body, auth = false }: RequestOptions = {},
+  {
+    method = "GET",
+    body,
+    auth = false,
+    cache,
+    next,
+  }: RequestOptions = {},
 ): Promise<T> {
   const headers: Record<string, string> = {};
   if (body !== undefined) {
@@ -42,14 +50,23 @@ export async function apiRequest<T>(
     }
   }
 
+  const fetchInit: RequestInit & {
+    next?: { revalidate?: number | false; tags?: string[] };
+  } = {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  };
+
+  if (next) {
+    fetchInit.next = next;
+  } else {
+    fetchInit.cache = cache ?? "no-store";
+  }
+
   let response: Response;
   try {
-    response = await fetch(`${backendBaseUrl()}${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      cache: "no-store",
-    });
+    response = await fetch(`${backendBaseUrl()}${path}`, fetchInit);
   } catch (cause) {
     throw new NetworkError(cause);
   }
