@@ -1,6 +1,5 @@
 import Link from "next/link";
 
-import { logoutAction } from "@/app/actions/auth";
 import { hasAccessToken } from "@/lib/session";
 
 export default async function Home() {
@@ -8,7 +7,7 @@ export default async function Home() {
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center bg-zinc-50 px-6 py-16 dark:bg-black">
-      <main className="flex w-full max-w-2xl flex-col items-center gap-10 text-center">
+      <section className="flex w-full max-w-2xl flex-col items-center gap-10 text-center">
         <div className="flex flex-col gap-3">
           <span className="text-xs font-medium uppercase tracking-widest text-zinc-500 dark:text-zinc-400">
             Personal Dev Blog
@@ -22,37 +21,30 @@ export default async function Home() {
           </p>
         </div>
 
-        {authed ? (
-          <div className="flex flex-col items-center gap-4">
-            <p className="text-sm text-zinc-700 dark:text-zinc-300">
-              로그인 상태입니다.
-            </p>
-            <form action={logoutAction}>
-              <button
-                type="submit"
-                className="h-11 rounded-md border border-zinc-300 bg-white px-6 text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
-              >
-                로그아웃
-              </button>
-            </form>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-3 sm:flex-row">
+        <div className="flex flex-col items-center gap-3 sm:flex-row">
+          <Link
+            href="/posts"
+            className="flex h-11 w-48 items-center justify-center rounded-md bg-zinc-900 text-sm font-medium text-zinc-50 transition-colors hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            포스트 둘러보기
+          </Link>
+          {authed ? (
             <Link
-              href="/login"
-              className="flex h-11 w-44 items-center justify-center rounded-md bg-zinc-900 text-sm font-medium text-zinc-50 transition-colors hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              href="/posts/new"
+              className="flex h-11 w-48 items-center justify-center rounded-md border border-zinc-300 bg-white text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
             >
-              로그인
+              새 포스트 작성
             </Link>
+          ) : (
             <Link
               href="/signup"
-              className="flex h-11 w-44 items-center justify-center rounded-md border border-zinc-300 bg-white text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
+              className="flex h-11 w-48 items-center justify-center rounded-md border border-zinc-300 bg-white text-sm font-medium text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
             >
               회원가입
             </Link>
-          </div>
-        )}
-      </main>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

@@ -30,3 +30,12 @@ export class NetworkError extends Error {
     this.cause = cause;
   }
 }
+
+export function toErrorMessage(
+  error: unknown,
+  fallback = "요청을 처리하지 못했습니다.",
+): string {
+  if (error instanceof NetworkError) return error.message;
+  if (error instanceof ApiError) return error.message || fallback;
+  return fallback;
+}
