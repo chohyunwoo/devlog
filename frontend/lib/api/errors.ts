@@ -6,7 +6,7 @@ export type FieldError = {
 export type BackendErrorBody = {
   code: string;
   message: string;
-  fieldErrors: FieldError[];
+  fieldErrors?: FieldError[];
 };
 
 export class ApiError extends Error {
