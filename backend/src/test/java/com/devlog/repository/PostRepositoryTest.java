@@ -127,6 +127,28 @@ class PostRepositoryTest {
             // 실제로 필드 접근까지 문제없는지도 확인
             assertThat(loaded.getAuthor().getEmail()).isEqualTo("a@devlog.com");
         }
+
+        @Test
+        @DisplayName("@EntityGraph에 의해 tags도 즉시 로딩되어 트랜잭션 밖에서도 접근할 수 있다")
+        void should_fetchTags_when_findAllCalled() {
+            // given
+            User author = persistUser("a@devlog.com", "authorA");
+            persistPost("p1", author, new LinkedHashSet<>(List.of("java", "spring")));
+            entityManager.flush();
+            entityManager.clear();
+
+            // when
+            Page<Post> page = postRepository.findAll(PageRequest.of(0, 10));
+
+            // then
+            Post loaded = page.getContent().get(0);
+            PersistenceUnitUtil unitUtil = em.getEntityManagerFactory().getPersistenceUnitUtil();
+            assertThat(unitUtil.isLoaded(loaded, "tags"))
+                    .as("open-in-view=false 환경에서 tags 가 LAZY 로 남으면 "
+                            + "컨트롤러 렌더링 단계에서 LazyInitializationException 이 발생한다")
+                    .isTrue();
+            assertThat(loaded.getTags()).containsExactlyInAnyOrder("java", "spring");
+        }
     }
 
     @Nested
@@ -172,6 +194,27 @@ class PostRepositoryTest {
             assertThat(page.isEmpty()).isTrue();
             assertThat(page.getTotalElements()).isZero();
         }
+
+        @Test
+        @DisplayName("author 와 tags 가 함께 즉시 로딩된다")
+        void should_fetchAuthorAndTags_when_findByAuthorIdCalled() {
+            // given
+            User userA = persistUser("a@devlog.com", "userA");
+            persistPost("A-1", userA, new LinkedHashSet<>(List.of("java")));
+            entityManager.flush();
+            entityManager.clear();
+
+            // when
+            Page<Post> page = postRepository.findByAuthor_Id(
+                    userA.getId(), PageRequest.of(0, 10));
+
+            // then
+            Post loaded = page.getContent().get(0);
+            PersistenceUnitUtil unitUtil = em.getEntityManagerFactory().getPersistenceUnitUtil();
+            assertThat(unitUtil.isLoaded(loaded, "author")).isTrue();
+            assertThat(unitUtil.isLoaded(loaded, "tags")).isTrue();
+            assertThat(loaded.getTags()).containsExactly("java");
+        }
     }
 
     @Nested
@@ -210,6 +253,26 @@ class PostRepositoryTest {
             // then
             assertThat(page.isEmpty()).isTrue();
             assertThat(page.getTotalElements()).isZero();
+        }
+
+        @Test
+        @DisplayName("반환된 Post 의 tags 는 즉시 로딩되어 있다")
+        void should_fetchTags_when_findByTagCalled() {
+            // given
+            User author = persistUser("a@devlog.com", "authorA");
+            persistPost("p1", author, new LinkedHashSet<>(List.of("java", "spring")));
+            entityManager.flush();
+            entityManager.clear();
+
+            // when
+            Page<Post> page = postRepository.findByTag("java", PageRequest.of(0, 10));
+
+            // then
+            Post loaded = page.getContent().get(0);
+            PersistenceUnitUtil unitUtil = em.getEntityManagerFactory().getPersistenceUnitUtil();
+            assertThat(unitUtil.isLoaded(loaded, "author")).isTrue();
+            assertThat(unitUtil.isLoaded(loaded, "tags")).isTrue();
+            assertThat(loaded.getTags()).containsExactlyInAnyOrder("java", "spring");
         }
 
         @Test
@@ -277,6 +340,30 @@ class PostRepositoryTest {
 
             // then
             assertThat(found).isEmpty();
+        }
+
+        @Test
+        @DisplayName("author 와 tags 가 함께 즉시 로딩된 Post 를 반환한다")
+        void should_fetchAuthorAndTags_when_findDetailByIdCalled() {
+            // given
+            User author = persistUser("a@devlog.com", "authorA");
+            Post saved = persistPost("p1", author, new LinkedHashSet<>(List.of("java", "spring")));
+            Long postId = saved.getId();
+            entityManager.flush();
+            entityManager.clear();
+
+            // when
+            Optional<Post> found = postRepository.findDetailById(postId);
+
+            // then
+            assertThat(found).isPresent();
+            Post loaded = found.get();
+            PersistenceUnitUtil unitUtil = em.getEntityManagerFactory().getPersistenceUnitUtil();
+            assertThat(unitUtil.isLoaded(loaded, "author")).isTrue();
+            assertThat(unitUtil.isLoaded(loaded, "tags"))
+                    .as("JOIN FETCH p.tags 가 빠지면 컨트롤러가 태그 직렬화 시점에 폭발한다")
+                    .isTrue();
+            assertThat(loaded.getTags()).containsExactlyInAnyOrder("java", "spring");
         }
     }
 

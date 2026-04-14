@@ -34,12 +34,17 @@ public class PostService {
                 request.content(),
                 author,
                 normalizeTags(request.tags()));
-        return postRepository.save(post);
+        Post saved = postRepository.save(post);
+        // open-in-view=false 환경에서 컨트롤러가 post.getTags() 를 접근할 때
+        // LazyInitializationException 이 나지 않도록 EntityGraph 가 붙은
+        // findDetailById 경로로 재조회해 author/tags 를 즉시 로딩한 상태로 반환한다.
+        return postRepository.findDetailById(saved.getId())
+                .orElseThrow(PostNotFoundException::new);
     }
 
     @Transactional
     public Post update(Long postId, Long authorId, PostUpdateRequest request) {
-        Post post = postRepository.findById(postId)
+        Post post = postRepository.findDetailById(postId)
                 .orElseThrow(PostNotFoundException::new);
         if (!post.isAuthoredBy(authorId)) {
             throw new PostAccessDeniedException();

@@ -23,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -101,8 +102,26 @@ class PostServiceTest {
     @DisplayName("create")
     class Create {
 
+        /**
+         * save() 가 ID 를 할당하고, 이어지는 findDetailById(ID) 가 같은 Post 를 돌려주도록
+         * 스텁한다. 실제 JPA 환경에서는 save 이후 재조회가 EntityGraph 경로로 author/tags 를
+         * 즉시 로딩한 상태를 보장한다 — 단위 테스트에서는 동일 인스턴스 반환으로 충분하다.
+         */
+        private AtomicReference<Post> stubSaveAndFindDetail() {
+            AtomicReference<Post> savedRef = new AtomicReference<>();
+            given(postRepository.save(any(Post.class))).willAnswer(inv -> {
+                Post p = inv.getArgument(0);
+                setField(Post.class, p, "id", POST_ID);
+                savedRef.set(p);
+                return p;
+            });
+            given(postRepository.findDetailById(POST_ID))
+                    .willAnswer(inv -> Optional.ofNullable(savedRef.get()));
+            return savedRef;
+        }
+
         @Test
-        @DisplayName("정상 생성 — author proxy 를 getReferenceById 로 얻어 Post 를 저장하고 결과를 반환한다")
+        @DisplayName("정상 생성 — save 후 findDetailById 로 재조회해 author/tags 가 로딩된 Post 를 반환한다")
         void should_createAndSavePost_when_requestIsValid() {
             // given
             User author = buildAuthor(AUTHOR_ID);
@@ -110,7 +129,7 @@ class PostServiceTest {
             PostCreateRequest req = new PostCreateRequest("title", "content", tags);
 
             given(userRepository.getReferenceById(AUTHOR_ID)).willReturn(author);
-            given(postRepository.save(any(Post.class))).willAnswer(inv -> inv.getArgument(0));
+            stubSaveAndFindDetail();
 
             // when
             Post result = postService.create(AUTHOR_ID, req);
@@ -129,6 +148,7 @@ class PostServiceTest {
                     .containsExactlyInAnyOrder("java", "spring");
 
             verify(userRepository).getReferenceById(AUTHOR_ID);
+            verify(postRepository).findDetailById(POST_ID);
         }
 
         @Test
@@ -138,7 +158,7 @@ class PostServiceTest {
             User author = buildAuthor(AUTHOR_ID);
             PostCreateRequest req = new PostCreateRequest("title", "content", null);
             given(userRepository.getReferenceById(AUTHOR_ID)).willReturn(author);
-            given(postRepository.save(any(Post.class))).willAnswer(inv -> inv.getArgument(0));
+            stubSaveAndFindDetail();
 
             // when
             Post result = postService.create(AUTHOR_ID, req);
@@ -158,7 +178,7 @@ class PostServiceTest {
             Set<String> originalTags = new LinkedHashSet<>(List.of("kotlin"));
             PostCreateRequest req = new PostCreateRequest("title", "content", originalTags);
             given(userRepository.getReferenceById(AUTHOR_ID)).willReturn(author);
-            given(postRepository.save(any(Post.class))).willAnswer(inv -> inv.getArgument(0));
+            stubSaveAndFindDetail();
 
             // when
             postService.create(AUTHOR_ID, req);
@@ -169,6 +189,25 @@ class PostServiceTest {
             assertThat(captor.getValue().getTags()).containsExactly("kotlin");
             // Post 내부에서 새 LinkedHashSet 으로 복사하므로 참조 동일성은 보장되지 않아야 함
             assertThat(captor.getValue().getTags()).isNotSameAs(originalTags);
+        }
+
+        @Test
+        @DisplayName("save 직후 findDetailById 가 비어 있으면 PostNotFoundException 을 던진다")
+        void should_throwPostNotFound_when_postDisappearsRightAfterSave() {
+            // given
+            User author = buildAuthor(AUTHOR_ID);
+            PostCreateRequest req = new PostCreateRequest("t", "c", Set.of());
+            given(userRepository.getReferenceById(AUTHOR_ID)).willReturn(author);
+            given(postRepository.save(any(Post.class))).willAnswer(inv -> {
+                Post p = inv.getArgument(0);
+                setField(Post.class, p, "id", POST_ID);
+                return p;
+            });
+            given(postRepository.findDetailById(POST_ID)).willReturn(Optional.empty());
+
+            // when / then
+            assertThatThrownBy(() -> postService.create(AUTHOR_ID, req))
+                    .isInstanceOf(PostNotFoundException.class);
         }
     }
 
@@ -188,7 +227,7 @@ class PostServiceTest {
             Post post = buildPersistedPost(POST_ID, author, Set.of("old"));
             PostUpdateRequest req = new PostUpdateRequest("new title", "new content", Set.of("new"));
 
-            given(postRepository.findById(POST_ID)).willReturn(Optional.of(post));
+            given(postRepository.findDetailById(POST_ID)).willReturn(Optional.of(post));
             given(postRepository.saveAndFlush(post)).willReturn(post);
 
             // when
@@ -200,7 +239,7 @@ class PostServiceTest {
             assertThat(result.getContent()).isEqualTo("new content");
             assertThat(result.getTags()).containsExactly("new");
 
-            verify(postRepository).findById(POST_ID);
+            verify(postRepository).findDetailById(POST_ID);
             verify(postRepository).saveAndFlush(post);
         }
 
@@ -212,7 +251,7 @@ class PostServiceTest {
             Post post = buildPersistedPost(POST_ID, author, Set.of("old"));
             PostUpdateRequest req = new PostUpdateRequest("new title", "new content", null);
 
-            given(postRepository.findById(POST_ID)).willReturn(Optional.of(post));
+            given(postRepository.findDetailById(POST_ID)).willReturn(Optional.of(post));
             given(postRepository.saveAndFlush(post)).willReturn(post);
 
             // when
@@ -227,7 +266,7 @@ class PostServiceTest {
         void should_throwPostNotFound_when_postDoesNotExist() {
             // given
             PostUpdateRequest req = new PostUpdateRequest("t", "c", Set.of());
-            given(postRepository.findById(POST_ID)).willReturn(Optional.empty());
+            given(postRepository.findDetailById(POST_ID)).willReturn(Optional.empty());
 
             // when / then
             assertThatThrownBy(() -> postService.update(POST_ID, AUTHOR_ID, req))
@@ -241,7 +280,7 @@ class PostServiceTest {
         void should_throwPostAccessDenied_when_requesterIsNotAuthor() {
             // given: isAuthoredBy 호출 여부 자체를 검증하기 위해 mock Post 사용
             Post post = mock(Post.class);
-            given(postRepository.findById(POST_ID)).willReturn(Optional.of(post));
+            given(postRepository.findDetailById(POST_ID)).willReturn(Optional.of(post));
             given(post.isAuthoredBy(OTHER_USER_ID)).willReturn(false);
 
             PostUpdateRequest req = new PostUpdateRequest("t", "c", Set.of());
