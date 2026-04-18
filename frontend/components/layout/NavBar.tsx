@@ -22,6 +22,14 @@ export async function NavBar() {
           >
             포스트
           </Link>
+          {authed ? (
+            <Link
+              href="/dev-notes"
+              className="transition-colors hover:text-zinc-900 dark:hover:text-zinc-50"
+            >
+              개발 일기
+            </Link>
+          ) : null}
         </div>
         <div className="ml-auto flex items-center gap-3">
           {authed ? (
